@@ -25,7 +25,7 @@ def get_args():
     return args
 
 
-def authenticate_tableu(username, password, site_id, content_url):
+def authenticate_tableau(username, password, site_id, content_url):
     """TSC library to sign in and sign out of Tableau Server and Tableau Online.
 
     :param username:The name of the user.
@@ -120,7 +120,7 @@ def main():
     filetype = args.file_type
     filename = args.file_name
     fileoptions = args.file_options  # TODO
-    server, tableau_auth = authenticate_tableu(username, password, site_id, server_url)
+    server, tableau_auth = authenticate_tableau(username, password, site_id, server_url)
     view_id = validate_get_view(server, tableau_auth, view_name)
     if view_id is not None:
         download_view_item(server, tableau_auth, filename, filetype, view_id)
