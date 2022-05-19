@@ -16,7 +16,7 @@ def get_args():
     parser.add_argument('--password', dest='password', required=True)
     parser.add_argument('--site-id', dest='site_id', required=True)
     parser.add_argument('--server-url', dest='server_url', required=True)
-    parser.add_argument('--datasource-name', dest='datasource_name', required=True)
+    parser.add_argument('--job-id', dest='job_id', required=True)
     args = parser.parse_args()
     return args
 
@@ -41,26 +41,22 @@ def authenticate_tableau(username, password, site_id, server_url):
     return server, connection
 
 
-def get_datasource_id(server, connection, datasource_name):
-    """Returns the specified data source item.
+def get_job_status(server, connection, job_id):
+    """Gets information about the specified job.
 
     :param connection:
-    :param datasourceid: The datasource_item specifies the data source to update.
-    :return: datasource : get the data source item to update
+    :param job_id: he job_id specifies the id of the job that is returned from an asynchronous task.
+    :return: jobinfo : RefreshExtract, finish_code
     """
     try:
         datasource_id = None
         with connection:
-            all_datasources, pagination_item = server.datasources.get()
-            for datasources in all_datasources:
-                if datasources.name == datasource_name:
-                    datasource_id = datasources.id
-                    break
+            jobinfo = server.jobs.get_by_id(job_id)
     except Exception as e:
-        print(f'Datasource item may not be valid or Datasource must be retrieved from server first.')
+        print(f'Job Resource Not Found.')
         print(e)
         sys.exit(EXIT_CODE_INVALID_RESOURCE)
-    return datasource_id
+    return jobinfo
 
 
 def refresh_datasource(server, connection, datasourceobj):
@@ -88,18 +84,9 @@ def main():
     password = args.password
     site_id = args.site_id
     server_url = args.server_url
-    datasource_name = args.datasource_name
+    job_id = args.job_id
     server, connection = authenticate_tableau(username, password, site_id, server_url)
-    datasource_id = get_datasource_id(server, connection, datasource_name)
-    # sys.exit(refresh_datasource(connection, datasourceobj))
-    if datasource_id is not None:
-        # TODO
-        # calling method twice, somehow the sign in context manager is not able to authenticate. Need to investigate.
-        server, connection = authenticate_tableau(username, password, site_id, server_url)
-        refresh_datasource(server, connection, datasource_id)
-    else:
-        print(f'datasource item may not be valid.')
-        sys.exit(EXIT_CODE_INVALID_RESOURCE)
+    get_job_status(server, connection, job_id)
 
 
 if __name__ == '__main__':
