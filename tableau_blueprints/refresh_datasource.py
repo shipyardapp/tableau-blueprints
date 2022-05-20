@@ -1,6 +1,7 @@
 import tableauserverclient as TSC
 import argparse
 import sys
+import json
 
 EXIT_CODE_FINAL_STATUS_SUCCESS = 0
 EXIT_CODE_UNKNOWN_ERROR = 3
@@ -19,6 +20,16 @@ def get_args():
     parser.add_argument('--datasource-name', dest='datasource_name', required=True)
     args = parser.parse_args()
     return args
+
+
+def write_json_to_file(json_object, file_name):
+    with open(file_name, 'w') as f:
+        f.write(
+            json.dumps(
+                json_object,
+                ensure_ascii=False,
+                indent=4))
+    print(f'Response stored at {file_name}')
 
 
 def authenticate_tableau(username, password, site_id, server_url):
@@ -63,7 +74,7 @@ def get_datasource_id(server, connection, datasource_name):
     return datasource_id
 
 
-def refresh_datasource(server, connection, datasourceobj):
+def refresh_datasource(server, connection, datasourceobj,datasource_name):
     """Refreshes the data of the specified extract.
 
     :param connection:
@@ -73,7 +84,7 @@ def refresh_datasource(server, connection, datasourceobj):
     try:
         with connection:
             refreshed_datasource = server.datasources.refresh(datasourceobj)
-            print(f'Datasource refresh trigger successful.')
+            print(f'Datasource {datasource_name} was successfully triggered.')
     except Exception as e:
         print(f'Refresh error or Extract operation for the datasource is not allowed.')
         print(e)
@@ -91,14 +102,14 @@ def main():
     datasource_name = args.datasource_name
     server, connection = authenticate_tableau(username, password, site_id, server_url)
     datasource_id = get_datasource_id(server, connection, datasource_name)
-    # sys.exit(refresh_datasource(connection, datasourceobj))
     if datasource_id is not None:
         # TODO
         # calling method twice, somehow the sign in context manager is not able to authenticate. Need to investigate.
         server, connection = authenticate_tableau(username, password, site_id, server_url)
-        refresh_datasource(server, connection, datasource_id)
+        refresh_datasource(server, connection, datasource_id, datasource_name)
     else:
-        print(f'datasource item may not be valid.')
+        print(f'{datasource_name} could not be found or your user does not have access. '
+              f'Please check for typos and ensure that the name you provide matches exactly (case senstive)')
         sys.exit(EXIT_CODE_INVALID_RESOURCE)
 
 
