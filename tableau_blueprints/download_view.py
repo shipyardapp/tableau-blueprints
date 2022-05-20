@@ -1,5 +1,6 @@
 import argparse
 import sys
+import os
 
 import tableauserverclient as TSC
 
@@ -7,9 +8,7 @@ EXIT_CODE_FINAL_STATUS_SUCCESS = 0
 EXIT_CODE_UNKNOWN_ERROR = 3
 EXIT_CODE_INVALID_CREDENTIALS = 200
 EXIT_CODE_INVALID_RESOURCE = 201
-EXIT_CODE_FINAL_STATUS_ERRORED = 211
-EXIT_CODE_FINAL_STATUS_CANCELLED = 212
-
+EXIT_CODE_FILE_WRITE_ERROR = 1021
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -76,6 +75,7 @@ def download_view_item(server, connection, filename, filetype, view_id, view_nam
     :param filetype: 'image', 'thumbnail', 'pdf', 'csv'
     :return:
     """
+    file_path = os.path.dirname(os.path.realpath(__file__))
     try:
         with connection:
             views = server.views.get_by_id(view_id)
@@ -99,11 +99,11 @@ def download_view_item(server, connection, filename, filetype, view_id, view_nam
                 server.views.populate_preview_image(views, req_options=None)
                 with open('./' + filename, 'wb') as f:
                     f.write(views.preview_image)
-            print("View {view_name}  saved to current directory successfully")
+            print(f'View {view_name} successfully saved to {file_path}')
     except OSError as e:
         print(f'Could not write file:.')
         print(e)
-        sys.exit(EXIT_CODE_INVALID_RESOURCE)
+        sys.exit(EXIT_CODE_FILE_WRITE_ERROR)
 
     return True
 
