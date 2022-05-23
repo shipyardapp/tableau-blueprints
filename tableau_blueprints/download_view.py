@@ -20,6 +20,7 @@ def get_args():
     parser.add_argument('--file-type', choices=['image', 'thumbnail', 'pdf', 'csv'], type=str.lower, required=True)
     parser.add_argument('--file-name', dest='file_name', required=True)
     parser.add_argument('--file-options', dest='file_options', required=False)
+    parser.add_argument('--workbook-name', dest='workbook_name', required=True)
     args = parser.parse_args()
     return args
 
@@ -36,6 +37,7 @@ def authenticate_tableau(username, password, site_id, content_url):
     try:
         tableau_auth = TSC.TableauAuth(username, password, site_id=site_id)
         server = TSC.Server(content_url, use_server_version=True)
+        server.version = '3.15'
         connection = server.auth.sign_in(tableau_auth)
     except Exception as e:
         print(f'Failed to connect to Tableau.')
@@ -44,25 +46,49 @@ def authenticate_tableau(username, password, site_id, content_url):
     return server, connection
 
 
-def validate_get_view(server, connection, view_name):
-    """Returns the details of a specific view.
+def validate_get_view(server, connection, view_name, workbook_name):
+    """Validate workbook and returns the details of a specific view.
 
     :param server:
-    :param connection:
-    :param view_name:
-    :return:
+    :param connection: Tableau connection object
+    :param view_name: The name of the view.
+    :param workbook_name: The name of the workbook associated with the view.
+    :return: view_id: details of a specific view.
     """
     try:
         view_id = None
+        req_option = TSC.RequestOptions()
+        req_option.filter.add(TSC.Filter(TSC.RequestOptions.Field.Name,
+                                         TSC.RequestOptions.Operator.Equals,
+                                         workbook_name))
         with connection:
-            all_views, pagination_item = server.views.get()
-            for views in all_views:
-                if views.name == view_name:
-                    view_id = views.id
+            all_workbooks = server.workbooks.get(req_options=req_option)
+            workbook_id= [workbook.id for workbook in all_workbooks[0] if workbook.name == workbook_name]
+            if workbook_id[0] is not None:
+                # get the workbook item
+                workbook = server.workbooks.get_by_id(workbook_id[0])
+
+                # get the view information
+                server.workbooks.populate_views(workbook)
+
+                # print information about the views for the work item
+                view_info=[view.id for view in workbook.views if view.name == view_name]
+            else:
+                print(f'{view_name} could not be found for the given workbook {workbook_name}.'
+                      f'Please check for typos and ensure that the name you provide matches exactly (case senstive)')
+                sys.exit(EXIT_CODE_INVALID_RESOURCE)
+
     except Exception as e:
-        print(f'View item may not be valid.')
+        print(f'{view_name} could not be found for the given workbook {workbook_name}.'
+              f'Please check for typos and ensure that the name you provide matches exactly (case senstive)')
         print(e)
         sys.exit(EXIT_CODE_INVALID_RESOURCE)
+    if len(view_info)<=0:
+        print(f'{view_name} could not be found or your user does not have access. '
+              f'Please check for typos and ensure that the name you provide matches exactly (case senstive)')
+        sys.exit(EXIT_CODE_INVALID_RESOURCE)
+    else:
+        view_id=view_info[0]
     return view_id
 
 
@@ -70,7 +96,7 @@ def download_view_item(server, connection, filename, filetype, view_id, view_nam
     """to download a view from Tableau Server
 
     :param server:
-    :param connection:
+    :param connection: Tableau connection object
     :param filename: name of the view to be downloaded as.
     :param filetype: 'image', 'thumbnail', 'pdf', 'csv'
     :return:
@@ -117,17 +143,14 @@ def main():
     view_name = args.view_name
     filetype = args.file_type
     filename = args.file_name
+    workbook_name = args.workbook_name
     fileoptions = args.file_options  # TODO
     server, connection = authenticate_tableau(username, password, site_id, server_url)
-    view_id = validate_get_view(server, connection, view_name)
-    if view_id is not None:
-        # TODO
-        # calling method twice, somehow the sign in context manager is not able to authenticate. Need to investigate.
-        server, connection = authenticate_tableau(username, password, site_id, server_url)
-        download_view_item(server, connection, filename, filetype, view_id, view_name)
-    else:
-        print(f'View item may not be valid.')
-        sys.exit(EXIT_CODE_INVALID_RESOURCE)
+    view_id = validate_get_view(server, connection, view_name, workbook_name)
+    # TODO
+    # calling method twice, somehow the sign in context manager is not able to authenticate. Need to investigate.
+    server, connection = authenticate_tableau(username, password, site_id, server_url)
+    download_view_item(server, connection, filename, filetype, view_id, view_name)
 
 
 if __name__ == '__main__':
