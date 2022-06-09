@@ -1,137 +1,169 @@
 import argparse
 import sys
 import os
+import code
+import shipyard_utils as shipyard
 
 import tableauserverclient as TSC
+
+try:
+    import authorization
+except BaseException:
+    from . import authorization
 
 EXIT_CODE_FINAL_STATUS_SUCCESS = 0
 EXIT_CODE_UNKNOWN_ERROR = 3
 EXIT_CODE_INVALID_CREDENTIALS = 200
-EXIT_CODE_INVALID_RESOURCE = 201
-EXIT_CODE_FILE_WRITE_ERROR = 1021
+EXIT_CODE_INVALID_PROJECT = 201
+EXIT_CODE_INVALID_WORKBOOK = 202
+EXIT_CODE_INVALID_VIEW = 203
+EXIT_CODE_FILE_WRITE_ERROR = 204
+
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--username', dest='username', required=True)
     parser.add_argument('--password', dest='password', required=True)
+    parser.add_argument(
+        '--sign-in-method',
+        dest='sign_in_method',
+        default='username_password',
+        choices={
+            'username_password',
+            'access_token'},
+        required=False)
     parser.add_argument('--site-id', dest='site_id', required=True)
     parser.add_argument('--server-url', dest='server_url', required=True)
     parser.add_argument('--view-name', dest='view_name', required=True)
-    parser.add_argument('--file-type', choices=['image', 'thumbnail', 'pdf', 'csv'], type=str.lower, required=True)
-    parser.add_argument('--file-name', dest='file_name', required=True)
+    parser.add_argument(
+        '--file-type',
+        dest='file_type',
+        choices=[
+            'png',
+            'pdf',
+            'csv'],
+        type=str.lower,
+        required=True)
+    parser.add_argument(
+        '--destination-file-name',
+        dest='destination_file_name',
+        default='output.csv',
+        required=True)
+    parser.add_argument(
+        '--destination-folder-name',
+        dest='destination_folder_name',
+        default='',
+        required=False)
     parser.add_argument('--file-options', dest='file_options', required=False)
     parser.add_argument('--workbook-name', dest='workbook_name', required=True)
+    parser.add_argument('--project-name', dest='project_name', required=True)
     args = parser.parse_args()
     return args
 
 
-def authenticate_tableau(username, password, site_id, content_url):
-    """TSC library to sign in and sign out of Tableau Server and Tableau Online.
-
-    :param username:The name of the user.
-    :param password:The password of the user.
-    :param site_id: The site_id for required datasources. ex: ffc7f88a-85a7-48d5-ac03-09ef0a677280
-    :param content_url: This corresponds to the contentUrl attribute in the Tableau REST API.
-    :return: connection object
+def get_project_id(server, project_name):
     """
-    try:
-        tableau_auth = TSC.TableauAuth(username, password, site_id=site_id)
-        server = TSC.Server(content_url, use_server_version=True)
-        server.version = '3.15'
-        connection = server.auth.sign_in(tableau_auth)
-    except Exception as e:
-        print(f'Failed to connect to Tableau.')
-        print(e)
-        sys.exit(EXIT_CODE_INVALID_CREDENTIALS)
-    return server, connection
-
-
-def validate_get_view(server, connection, view_name, workbook_name):
-    """Validate workbook and returns the details of a specific view.
-
-    :param server:
-    :param connection: Tableau connection object
-    :param view_name: The name of the view.
-    :param workbook_name: The name of the workbook associated with the view.
-    :return: view_id: details of a specific view.
+    Looks up and returns the project_id of the project_name that was specified.
     """
-    try:
-        view_id = None
-        req_option = TSC.RequestOptions()
-        req_option.filter.add(TSC.Filter(TSC.RequestOptions.Field.Name,
-                                         TSC.RequestOptions.Operator.Equals,
-                                         workbook_name))
-        with connection:
-            all_workbooks = server.workbooks.get(req_options=req_option)
-            workbook_id= [workbook.id for workbook in all_workbooks[0] if workbook.name == workbook_name]
-            if workbook_id[0] is not None:
-                # get the workbook item
-                workbook = server.workbooks.get_by_id(workbook_id[0])
+    req_option = TSC.RequestOptions()
+    req_option.filter.add(TSC.Filter(TSC.RequestOptions.Field.Name,
+                                     TSC.RequestOptions.Operator.Equals,
+                                     project_name))
 
-                # get the view information
-                server.workbooks.populate_views(workbook)
-
-                # print information about the views for the work item
-                view_info=[view.id for view in workbook.views if view.name == view_name]
-            else:
-                print(f'{view_name} could not be found for the given workbook {workbook_name}.'
-                      f'Please check for typos and ensure that the name you provide matches exactly (case senstive)')
-                sys.exit(EXIT_CODE_INVALID_RESOURCE)
-
-    except Exception as e:
-        print(f'{view_name} could not be found for the given workbook {workbook_name}.'
-              f'Please check for typos and ensure that the name you provide matches exactly (case senstive)')
-        print(e)
-        sys.exit(EXIT_CODE_INVALID_RESOURCE)
-    if len(view_info)<=0:
-        print(f'{view_name} could not be found or your user does not have access. '
-              f'Please check for typos and ensure that the name you provide matches exactly (case senstive)')
-        sys.exit(EXIT_CODE_INVALID_RESOURCE)
+    project_matches = server.projects.get(req_options=req_option)
+    if len(project_matches[0]) == 1:
+        project_id = project_matches[0][0].id
     else:
-        view_id=view_info[0]
+        print(
+            f'{project_name} could not be found. Please check for typos and ensure that the name you provide matches exactly (case sensitive)')
+        sys.exit(EXIT_CODE_INVALID_PROJECT)
+    return project_id
+
+
+def get_workbook_id(server, project_id, workbook_name):
+    """
+    Looks up and returns the workbook_id of the workbook_name that was specified, filtered by project_id matches.
+    """
+    req_option = TSC.RequestOptions()
+    req_option.filter.add(TSC.Filter(TSC.RequestOptions.Field.Name,
+                                     TSC.RequestOptions.Operator.Equals,
+                                     workbook_name))
+
+    workbook_matches = server.workbooks.get(req_options=req_option)
+    # We can't filter by project_id in the initial request,
+    # so we have to find all name matches and look for a project_id match.
+    workbook_id = None
+    for workbook in workbook_matches[0]:
+        if workbook.project_id == project_id:
+            workbook_id = workbook.id
+    if workbook_id is None:
+        print(
+            f'{workbook_name} could not be found that lives in the project you specified. Please check for typos and ensure that the name(s) you provide match exactly (case sensitive)')
+        sys.exit(EXIT_CODE_INVALID_WORKBOOK)
+    return workbook_id
+
+
+def get_view_id(server, project_id, workbook_id, view_name):
+    """
+    Looks up and returns the view_id of the view_name that was specified, filtered by project_id AND workbook_id matches.
+    """
+    req_option = TSC.RequestOptions()
+    req_option.filter.add(TSC.Filter(TSC.RequestOptions.Field.Name,
+                                     TSC.RequestOptions.Operator.Equals,
+                                     view_name))
+
+    view_matches = server.views.get(req_options=req_option)
+    # We can't filter by project_id or workbook_id in the initial request,
+    # so we have to find all name matches and look for those matches.
+    view_id = None
+    for view in view_matches[0]:
+        if view.project_id == project_id:
+            if view.workbook_id == workbook_id:
+                view_id = view.id
+    if view_id is None:
+        print(
+            f'{view_name} could not be found that lives in the project and workbook you specified. Please check for typos and ensure that the name(s) you provide match exactly (case sensitive)')
+        sys.exit(EXIT_CODE_INVALID_VIEW)
     return view_id
 
 
-def download_view_item(server, connection, filename, filetype, view_id, view_name):
-    """to download a view from Tableau Server
-
-    :param server:
-    :param connection: Tableau connection object
-    :param filename: name of the view to be downloaded as.
-    :param filetype: 'image', 'thumbnail', 'pdf', 'csv'
-    :return:
+def generate_view_content(server, view_id, file_type):
     """
-    file_path = os.path.dirname(os.path.realpath(__file__))
+    Given a specific view_id, populate the view and return the bytes necessary for creating the file.
+    """
+    view_object = server.views.get_by_id(view_id)
+    if file_type == 'png':
+        server.views.populate_image(view_object)
+        view_content = view_object.image
+    if file_type == 'pdf':
+        server.views.populate_pdf(view_object, req_options=None)
+        view_content = view_object.pdf
+    if file_type == 'csv':
+        server.views.populate_csv(view_object, req_options=None)
+        view_content = view_object.csv
+    return view_content
+
+
+def write_view_content_to_file(
+        destination_full_path,
+        view_content,
+        file_type,
+        view_name):
+    """
+    Write the byte contents to the specified file path.
+    """
     try:
-        with connection:
-            views = server.views.get_by_id(view_id)
-            if filetype == "image":
-                server.views.populate_image(views)
-                with open('./' + filename, 'wb') as f:
-                    f.write(views.image)
-
-            if filetype == "pdf":  # Populate and save the PDF data in a file
-                server.views.populate_pdf(views, req_options=None)
-                with open('./' + filename, 'wb') as f:
-                    f.write(views.pdf)
-
-            if filetype == "csv":
-                server.views.populate_csv(views, req_options=None)
-                with open('./' + filename, 'wb') as f:
-                    # Perform byte join on the CSV data
-                    f.write(b''.join(views.csv))
-
-            if filetype == "thumbnail":
-                server.views.populate_preview_image(views, req_options=None)
-                with open('./' + filename, 'wb') as f:
-                    f.write(views.preview_image)
-            print(f'View {view_name} successfully saved to {file_path}')
+        with open(destination_full_path, 'wb') as f:
+            if file_type == 'csv':
+                f.writelines(view_content)
+            else:
+                f.write(view_content)
+        print(
+            f'Successfully downloaded {view_name} to {destination_full_path}')
     except OSError as e:
-        print(f'Could not write file:.')
+        print(f'Could not write file: {destination_full_path}')
         print(e)
         sys.exit(EXIT_CODE_FILE_WRITE_ERROR)
-
-    return True
 
 
 def main():
@@ -140,17 +172,47 @@ def main():
     password = args.password
     site_id = args.site_id
     server_url = args.server_url
+    sign_in_method = args.sign_in_method
     view_name = args.view_name
-    filetype = args.file_type
-    filename = args.file_name
+    file_type = args.file_type
+    project_name = args.project_name
     workbook_name = args.workbook_name
-    fileoptions = args.file_options  # TODO
-    server, connection = authenticate_tableau(username, password, site_id, server_url)
-    view_id = validate_get_view(server, connection, view_name, workbook_name)
-    # TODO
-    # calling method twice, somehow the sign in context manager is not able to authenticate. Need to investigate.
-    server, connection = authenticate_tableau(username, password, site_id, server_url)
-    download_view_item(server, connection, filename, filetype, view_id, view_name)
+
+    # Set all file parameters
+    destination_file_name = args.destination_file_name
+    destination_folder_name = shipyard.files.clean_folder_name(
+        args.destination_folder_name)
+    destination_full_path = shipyard.files.combine_folder_and_file_name(
+        folder_name=destination_folder_name, file_name=destination_file_name)
+
+    server, connection = authorization.connect_to_tableau(
+        username,
+        password,
+        site_id,
+        server_url,
+        sign_in_method)
+
+    with connection:
+        project_id = get_project_id(server=server, project_name=project_name)
+        workbook_id = get_workbook_id(
+            server=server,
+            project_id=project_id,
+            workbook_name=workbook_name)
+        view_id = get_view_id(
+            server=server,
+            project_id=project_id,
+            workbook_id=workbook_id,
+            view_name=view_name)
+
+        view_content = generate_view_content(
+            server=server, view_id=view_id, file_type=file_type)
+        shipyard.files.create_folder_if_dne(
+            destination_folder_name=destination_folder_name)
+        write_view_content_to_file(
+            destination_full_path=destination_full_path,
+            view_content=view_content,
+            file_type=file_type,
+            view_name=view_name)
 
 
 if __name__ == '__main__':
