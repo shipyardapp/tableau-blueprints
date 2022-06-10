@@ -82,7 +82,7 @@ def main():
     sign_in_method = args.sign_in_method
 
     base_folder_name = shipyard.logs.determine_base_artifact_folder(
-        'dbtcloud')
+        'tableau')
     artifact_subfolder_paths = shipyard.logs.determine_artifact_subfolders(
         base_folder_name)
     shipyard.logs.create_artifacts_folders(artifact_subfolder_paths)
