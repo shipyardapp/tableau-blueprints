@@ -42,7 +42,7 @@ def get_job_info(server, job_id):
     except Exception as e:
         print(f'Job {job_id} was not found.')
         print(e)
-        sys.exit(errors.EXIT_CODE_JOB_NOT_FOUND)
+        sys.exit(errors.EXIT_CODE_INVALID_JOB)
     return job_info
 
 
@@ -72,7 +72,7 @@ def determine_job_status(server, job_id):
         exit_code = errors.EXIT_CODE_FINAL_STATUS_CANCELLED
     else:
         print(f'Something went wrong when fetching status for job {job_id}')
-        exit_code = errors.EXIT_CODE_GENERIC_QUERY_JOB_ERROR
+        exit_code = errors.EXIT_CODE_UNKNOWN_ERROR
     return exit_code
 
 

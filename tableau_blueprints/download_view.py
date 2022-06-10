@@ -8,16 +8,10 @@ import tableauserverclient as TSC
 
 try:
     import authorization
+    import errors
 except BaseException:
     from . import authorization
-
-EXIT_CODE_FINAL_STATUS_SUCCESS = 0
-EXIT_CODE_UNKNOWN_ERROR = 3
-EXIT_CODE_INVALID_CREDENTIALS = 200
-EXIT_CODE_INVALID_PROJECT = 201
-EXIT_CODE_INVALID_WORKBOOK = 202
-EXIT_CODE_INVALID_VIEW = 203
-EXIT_CODE_FILE_WRITE_ERROR = 204
+    from . import errors
 
 
 def get_args():
@@ -76,7 +70,7 @@ def get_project_id(server, project_name):
     else:
         print(
             f'{project_name} could not be found. Please check for typos and ensure that the name you provide matches exactly (case sensitive)')
-        sys.exit(EXIT_CODE_INVALID_PROJECT)
+        sys.exit(errors.EXIT_CODE_INVALID_PROJECT)
     return project_id
 
 
@@ -99,7 +93,7 @@ def get_workbook_id(server, project_id, workbook_name):
     if workbook_id is None:
         print(
             f'{workbook_name} could not be found that lives in the project you specified. Please check for typos and ensure that the name(s) you provide match exactly (case sensitive)')
-        sys.exit(EXIT_CODE_INVALID_WORKBOOK)
+        sys.exit(errors.EXIT_CODE_INVALID_WORKBOOK)
     return workbook_id
 
 
@@ -123,7 +117,7 @@ def get_view_id(server, project_id, workbook_id, view_name):
     if view_id is None:
         print(
             f'{view_name} could not be found that lives in the project and workbook you specified. Please check for typos and ensure that the name(s) you provide match exactly (case sensitive)')
-        sys.exit(EXIT_CODE_INVALID_VIEW)
+        sys.exit(errors.EXIT_CODE_INVALID_VIEW)
     return view_id
 
 
@@ -163,7 +157,7 @@ def write_view_content_to_file(
     except OSError as e:
         print(f'Could not write file: {destination_full_path}')
         print(e)
-        sys.exit(EXIT_CODE_FILE_WRITE_ERROR)
+        sys.exit(errors.EXIT_CODE_FILE_WRITE_ERROR)
 
 
 def main():
