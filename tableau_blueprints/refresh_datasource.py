@@ -1,26 +1,19 @@
-from httprequest_blueprints import execute_request
-
 import tableauserverclient as TSC
 import argparse
 import sys
-import json
 import time
-import os
-import pickle
+import shipyard_utils as shipyard
+import code
 
 # Handle import difference between local and github install
 try:
     import job_status
+    import errors
+    import authorization
 except BaseException:
     from . import job_status
-
-EXIT_CODE_FINAL_STATUS_SUCCESS = 0
-EXIT_CODE_UNKNOWN_ERROR = 3
-EXIT_CODE_INVALID_CREDENTIALS = 200
-EXIT_CODE_INVALID_RESOURCE = 201
-EXIT_CODE_JOB_NOT_FOUND = 404
-EXIT_CODE_JOB_CACNELLED = 403
-EXIT_CODE_GENERIC_QUERY_JOB_ERROR = 400
+    from . import errors
+    from . import authorization
 
 
 def get_args():
@@ -29,7 +22,18 @@ def get_args():
     parser.add_argument('--password', dest='password', required=True)
     parser.add_argument('--site-id', dest='site_id', required=True)
     parser.add_argument('--server-url', dest='server_url', required=True)
-    parser.add_argument('--datasource-name', dest='datasource_name', required=True)
+    parser.add_argument(
+        '--sign-in-method',
+        dest='sign_in_method',
+        default='username_password',
+        choices={
+            'username_password',
+            'access_token'},
+        required=False)
+    parser.add_argument(
+        '--datasource-name',
+        dest='datasource_name',
+        required=True)
     parser.add_argument('--project-name', dest='project_name', required=True)
     parser.add_argument('--check-status', dest='check_status', default='TRUE',
                         choices={
@@ -40,76 +44,50 @@ def get_args():
     return args
 
 
-def write_json_to_file(json_object, file_name):
-    with open(file_name, 'w') as f:
-        f.write(
-            json.dumps(
-                json_object,
-                ensure_ascii=False,
-                indent=4))
-    print(f'Response stored at {file_name}')
-
-
-def authenticate_tableau(username, password, site_id, server_url):
-    """TSC library to sign in and sign out of Tableau Server and Tableau Online.
-
-    :param username:The name of the user.
-    :param password:The password of the user.
-    :param site_id: The site_id for required datasources. ex: ffc7f88a-85a7-48d5-ac03-09ef0a677280
-    :param server_url: This corresponds to the contentUrl attribute in the Tableau REST API.
-    :return: connection object
+def get_project_id(server, project_name):
     """
-    try:
-        tableau_auth = TSC.TableauAuth(username, password, site_id=site_id)
-        server = TSC.Server(server_url, use_server_version=True)
-        server.version = '3.15'
-        connection = server.auth.sign_in(tableau_auth)
-    except Exception as e:
-        print(f'Failed to connect to Tableau.')
-        print(e)
-        sys.exit(EXIT_CODE_INVALID_CREDENTIALS)
-    return server, connection
-
-
-def get_datasource_id(server, connection, datasource_name, project_name):
-    """Returns the specified data source item
-
-    :param server:
-    :param connection: Tableau connection object
-    :param datasource_name: The name of the data source.
-    :param project_name: The name of the project associated with the data source.
-    :return: datasource : get the data source item to refresh
+    Looks up and returns the project_id of the project_name that was specified.
     """
-    try:
-        datasource_id = None
-        with connection:
-            req_option = TSC.RequestOptions()
-            req_option.filter.add(TSC.Filter(TSC.RequestOptions.Field.Name,
-                                             TSC.RequestOptions.Operator.Equals,
-                                             datasource_name))
-            all_datasources, pagination_item = server.datasources.get(req_options=req_option)
-            for datasources in all_datasources:
-                if datasources.name == datasource_name:
-                    if datasources.project_name == project_name:
-                        datasource_id = datasources.id
-                        break
-                    else:
-                        print(f'{datasource_name} could not be found for the give project {project_name}.')
-                        sys.exit(EXIT_CODE_INVALID_RESOURCE)
-    except Exception as e:
-        print(f'Datasource item may not be valid or Datasource must be retrieved from server first.')
-        print(e)
-        sys.exit(EXIT_CODE_INVALID_RESOURCE)
+    req_option = TSC.RequestOptions()
+    req_option.filter.add(TSC.Filter(TSC.RequestOptions.Field.Name,
+                                     TSC.RequestOptions.Operator.Equals,
+                                     project_name))
 
+    project_matches = server.projects.get(req_options=req_option)
+    if len(project_matches[0]) == 1:
+        project_id = project_matches[0][0].id
+    else:
+        print(
+            f'{project_name} could not be found. Please check for typos and ensure that the name you provide matches exactly (case sensitive)')
+        sys.exit(errors.EXIT_CODE_INVALID_PROJECT)
+    return project_id
+
+
+def get_datasource_id(server, project_id, datasource_name):
+    """
+    Looks up and returns the datasource_id of the datasource_name that was specified, filtered by project_id matches.
+    """
+    req_option = TSC.RequestOptions()
+    req_option.filter.add(TSC.Filter(TSC.RequestOptions.Field.Name,
+                                     TSC.RequestOptions.Operator.Equals,
+                                     datasource_name))
+
+    datasource_matches = server.datasources.get(req_options=req_option)
+
+    # We can't filter by project_id or project_name in the initial request,
+    # so we have to find all name matches and look for a project_id match.
+    datasource_id = None
+    for datasource in datasource_matches[0]:
+        if datasource.project_id == project_id:
+            datasource_id = datasource.id
     if datasource_id is None:
-        print(f'{datasource_name} could not be found or your user does not have access. '
-              f'Please check for typos and ensure that the name you provide matches exactly (case senstive)')
-        sys.exit(EXIT_CODE_INVALID_RESOURCE)
-
+        print(
+            f'{datasource_name} could not be found that lives in the project you specified. Please check for typos and ensure that the name(s) you provide match exactly (case sensitive)')
+        sys.exit(errors.EXIT_CODE_INVALID_DATASOURCE)
     return datasource_id
 
 
-def refresh_datasource(server, connection, datasourceobj, datasource_name):
+def refresh_datasource(server, datasource_id, datasource_name):
     """Refreshes the data of the specified extract.
 
     :param server:
@@ -120,13 +98,19 @@ def refresh_datasource(server, connection, datasourceobj, datasource_name):
     """
 
     try:
-        with connection:
-            refreshed_datasource = server.datasources.refresh(datasourceobj)
-            print(f'Datasource {datasource_name} was successfully triggered.')
+        datasource = server.datasources.get_by_id(datasource_id)
+        refreshed_datasource = server.datasources.refresh(datasource)
+        print(f'Datasource {datasource_name} was successfully triggered.')
     except Exception as e:
-        print(f'Refresh error or Extract operation for the datasource is not allowed.')
+        if 'Resource Conflict' in e.args[0]:
+            print(
+                f'A refresh or extract operation for the datasource is already underway.')
+        if 'is not allowed.' in e.args[0]:
+            print(f'Refresh or extract operation for the datasource is not allowed.')
+        else:
+            print(f'An unknown refresh or extract error occurred.')
         print(e)
-        sys.exit(EXIT_CODE_INVALID_RESOURCE)
+        sys.exit(errors.EXIT_CODE_REFRESH_ERROR)
 
     return refreshed_datasource
 
@@ -139,45 +123,39 @@ def main():
     server_url = args.server_url
     datasource_name = args.datasource_name
     project_name = args.project_name
-    check_status = execute_request.convert_to_boolean(args.check_status)
-    server, connection = authenticate_tableau(username, password, site_id, server_url)
-    datasource_id = get_datasource_id(server, connection, datasource_name, project_name)
+    sign_in_method = args.sign_in_method
+    should_check_status = shipyard.args.convert_to_boolean(args.check_status)
 
-    # TODO
-    # calling method twice, somehow the sign in context manager is not able to authenticate. Need to investigate.
-    server, connection = authenticate_tableau(username, password, site_id, server_url)
-    refreshed_datasource = refresh_datasource(server, connection, datasource_id, datasource_name)
-    job_id = refreshed_datasource.id
+    base_folder_name = shipyard.logs.determine_base_artifact_folder(
+        'dbtcloud')
+    artifact_subfolder_paths = shipyard.logs.determine_artifact_subfolders(
+        base_folder_name)
+    shipyard.logs.create_artifacts_folders(artifact_subfolder_paths)
 
-    artifact_directory_default = f'{os.environ.get("USER")}-artifacts'
-    base_folder_name = execute_request.clean_folder_name(
-        f'{os.environ.get("SHIPYARD_ARTIFACTS_DIRECTORY", artifact_directory_default)}/tableau-blueprints/')
+    server, connection = authorization.connect_to_tableau(
+        username, password, site_id, server_url, sign_in_method)
 
-    folder_name = f'{base_folder_name}/responses',
-    file_name = f'job_{job_id}_response.json'
+    with connection:
+        project_id = get_project_id(server, project_name)
+        datasource_id = get_datasource_id(
+            server, project_id, datasource_name)
+        refreshed_datasource = refresh_datasource(
+            server, datasource_id, datasource_name)
+        job_id = refreshed_datasource.id
 
-    combined_name = execute_request.combine_folder_and_file_name(folder_name, file_name)
-    # save the refresh response . check for json
-    write_json_to_file(refreshed_datasource, combined_name)
-
-    pickle_folder_name = execute_request.clean_folder_name(
-        f'{base_folder_name}/variables')
-    execute_request.create_folder_if_dne(pickle_folder_name)
-    pickle_file_name = execute_request.combine_folder_and_file_name(
-        pickle_folder_name, 'job_id.pickle')
-    with open(pickle_file_name, 'wb') as f:
-        pickle.dump(job_id, f)
-
-    if check_status:
-        try:
-            # `wait_for_job` will throw if the job isn't executed successfully
-            server.jobs.wait_for_job(refreshed_datasource)
-            time.sleep(30)
-            server, connection = authenticate_tableau(username, password, site_id, server_url)
-            sys.exit(job_status.get_job_status(server, connection, job_id))
-        except:
-            print(f'Tableau reports that the job {job_id} is exited as incomplete.')
-            sys.exit(EXIT_CODE_GENERIC_QUERY_JOB_ERROR)
+        if should_check_status:
+            try:
+                # `wait_for_job` will automatically check every few seconds
+                # and throw if the job isn't executed successfully
+                print('Waiting for the job to complete...')
+                server.jobs.wait_for_job(job_id)
+                exit_code = job_status.determine_job_status(server, job_id)
+            except BaseException:
+                exit_code = job_status.determine_job_status(server, job_id)
+            sys.exit(exit_code)
+        else:
+            shipyard.logs.create_pickle_file(
+                artifact_subfolder_paths, 'job_id', job_id)
 
 
 if __name__ == '__main__':

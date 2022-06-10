@@ -1,21 +1,17 @@
-from httprequest_blueprints import execute_request
-
 import tableauserverclient as TSC
 import argparse
 import sys
 import os
 import pickle
+import shipyard_utils as shipyard
+import code
 
-EXIT_CODE_FINAL_STATUS_SUCCESS = 0
-EXIT_CODE_UNKNOWN_ERROR = 3
-EXIT_CODE_INVALID_CREDENTIALS = 200
-EXIT_CODE_INVALID_RESOURCE = 201
-EXIT_CODE_FINAL_STATUS_ERRORED = 211
-EXIT_CODE_FINAL_STATUS_CANCELLED = 212
-EXIT_CODE_STATUS_INCOMPLETE = 210
-EXIT_CODE_JOB_NOT_FOUND = 404
-EXIT_CODE_JOB_CACNELLED = 403
-EXIT_CODE_GENERIC_QUERY_JOB_ERROR = 400
+try:
+    import errors
+    import authorization
+except BaseException:
+    from . import errors
+    from . import authorization
 
 
 def get_args():
@@ -24,79 +20,60 @@ def get_args():
     parser.add_argument('--password', dest='password', required=True)
     parser.add_argument('--site-id', dest='site_id', required=True)
     parser.add_argument('--server-url', dest='server_url', required=True)
-    parser.add_argument('--job-id', dest='job_id', required=True)
+    parser.add_argument(
+        '--sign-in-method',
+        dest='sign_in_method',
+        default='username_password',
+        choices={
+            'username_password',
+            'access_token'},
+        required=False)
+    parser.add_argument('--job-id', dest='job_id', required=False)
     args = parser.parse_args()
     return args
 
 
-def authenticate_tableau(username, password, site_id, server_url):
-    """TSC library to sign in and sign out of Tableau Server and Tableau Online.
-
-    :param username:The name of the user.
-    :param password:The password of the user.
-    :param site_id: The site_id for required datasources. ex: ffc7f88a-85a7-48d5-ac03-09ef0a677280
-    :param server_url: This corresponds to the contentUrl attribute in the Tableau REST API.
-    :return: connection object
+def get_job_info(server, job_id):
+    """
+    Gets information about the specified job_id.
     """
     try:
-        tableau_auth = TSC.TableauAuth(username, password, site_id=site_id)
-        server = TSC.Server(server_url, use_server_version=True)
-        connection = server.auth.sign_in(tableau_auth)
+        job_info = server.jobs.get_by_id(job_id)
     except Exception as e:
-        print(f'Failed to connect to Tableau.')
+        print(f'Job {job_id} was not found.')
         print(e)
-        sys.exit(EXIT_CODE_INVALID_CREDENTIALS)
-    return server, connection
+        sys.exit(errors.EXIT_CODE_JOB_NOT_FOUND)
+    return job_info
 
 
-def determine_run_status(run_details_response):
-    """Job status response handler.
-    The finishCode indicates the status of the job: 0 for success, 1 for error, or 2 for cancelled.
-
-    :param run_details_response:
-    :return:
+def determine_job_status(server, job_id):
     """
-    run_id = run_details_response.id
-    if run_details_response.finish_code == 0:
-        if run_details_response.progress == "Pending":
-            print(f'Tableau reports that the run {run_id} in Pending status.')
-            exit_code = EXIT_CODE_STATUS_INCOMPLETE
-        elif run_details_response.progress == "Cancelled":
-            print(f'Tableau reports that run {run_id} was cancelled.')
-            exit_code = EXIT_CODE_JOB_CACNELLED
-        elif run_details_response.progress == "Failed":
-            print(f'Tableau reports that run {run_id} was Failed.')
-            exit_code = EXIT_CODE_FINAL_STATUS_ERRORED
-        elif run_details_response.progress == "InProgress":
-            print(f'Tableau reports that run {run_id} is in InProgress.')
-            exit_code = EXIT_CODE_STATUS_INCOMPLETE
+    Job status response handler.
+
+    The finishCode indicates the status of the job: -1 for incomplete, 0 for success, 1 for error, or 2 for cancelled.
+    """
+    job_info = get_job_info(server, job_id)
+    if job_info.finish_code == -1:
+        if job_info.started_at is None:
+            print(
+                f'Tableau reports that the job {job_id} has not yet started.')
         else:
-            print(f'Tableau reports that run {run_id} was successful.')
-            exit_code = EXIT_CODE_FINAL_STATUS_SUCCESS
-    elif run_details_response.finish_code == 1:
-        print(f'Tableau reports that the job {run_id} is exited with error.')
-        exit_code = EXIT_CODE_GENERIC_QUERY_JOB_ERROR
+            print(
+                f'Tableau reports that the job {job_id} is not yet complete.')
+        exit_code = errors.EXIT_CODE_STATUS_INCOMPLETE
+    elif job_info.finish_code == 0:
+        print(f'Tableau reports that job {job_id} was successful.')
+        exit_code = errors.EXIT_CODE_FINAL_STATUS_SUCCESS
+    elif job_info.finish_code == 1:
+        print(f'Tableau reports that job {job_id} errored.')
+        exit_code = errors.EXIT_CODE_FINAL_STATUS_ERRORED
+    elif job_info.finish_code == 2:
+        print(f'Tableau reports that job {job_id} was cancelled.')
+        exit_code = errors.EXIT_CODE_FINAL_STATUS_CANCELLED
     else:
-        print(f'Tableau reports that the job {run_id} was cancelled.')
-        exit_code = EXIT_CODE_STATUS_INCOMPLETE
+        print(f'Something went wrong when fetching status for job {job_id}')
+        exit_code = errors.EXIT_CODE_GENERIC_QUERY_JOB_ERROR
     return exit_code
-
-
-def get_job_status(server, connection, job_id):
-    """Gets information about the specified job.
-
-    :param connection:
-    :param job_id: the job_id specifies the id of the job that is returned from an asynchronous task.
-    :return: jobinfo : RefreshExtract, finish_code
-    """
-    try:
-        with connection:
-            jobinfo = server.jobs.get_by_id(job_id)
-    except Exception as e:
-        print(f'Job {job_id} Resource Not Found.')
-        print(e)
-        sys.exit(EXIT_CODE_JOB_NOT_FOUND)
-    return jobinfo
 
 
 def main():
@@ -105,27 +82,27 @@ def main():
     password = args.password
     site_id = args.site_id
     server_url = args.server_url
+    sign_in_method = args.sign_in_method
 
-    artifact_directory_default = f'{os.environ.get("USER")}-artifacts'
-
-    base_folder_name = execute_request.clean_folder_name(
-        f'{os.environ.get("SHIPYARD_ARTIFACTS_DIRECTORY", artifact_directory_default)}/tableau-blueprints/')
-
-    pickle_folder_name = execute_request.clean_folder_name(
-        f'{base_folder_name}/variables')
-
-    execute_request.create_folder_if_dne(pickle_folder_name)
-    pickle_file_name = execute_request.combine_folder_and_file_name(
-        pickle_folder_name, 'job_id.pickle')
+    base_folder_name = shipyard.logs.determine_base_artifact_folder(
+        'dbtcloud')
+    artifact_subfolder_paths = shipyard.logs.determine_artifact_subfolders(
+        base_folder_name)
+    shipyard.logs.create_artifacts_folders(artifact_subfolder_paths)
 
     if args.job_id:
         job_id = args.job_id
     else:
-        with open(pickle_file_name, 'rb') as f:
-            job_id = pickle.load(f)
+        job_id = shipyard.logs.read_pickle_file(
+            artifact_subfolder_paths, 'job_id')
 
-    server, connection = authenticate_tableau(username, password, site_id, server_url)
-    sys.exit(get_job_status(server, connection, job_id))
+    server, connection = authorization.connect_to_tableau(
+        username, password, site_id, server_url, sign_in_method)
+
+    with connection:
+        # job_info = get_job_info(server, job_id)
+        job_status = determine_job_status(server, job_id)
+        sys.exit(job_status)
 
 
 if __name__ == '__main__':
