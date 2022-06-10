@@ -1,10 +1,7 @@
 import tableauserverclient as TSC
 import argparse
 import sys
-import os
-import pickle
 import shipyard_utils as shipyard
-import code
 
 try:
     import errors
@@ -100,9 +97,7 @@ def main():
         username, password, site_id, server_url, sign_in_method)
 
     with connection:
-        # job_info = get_job_info(server, job_id)
-        job_status = determine_job_status(server, job_id)
-        sys.exit(job_status)
+        sys.exit(determine_job_status(server, job_id))
 
 
 if __name__ == '__main__':

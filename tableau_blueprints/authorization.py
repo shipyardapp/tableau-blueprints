@@ -17,7 +17,7 @@ def connect_to_tableau(
     :param site_id: The site_id for required datasources. ex: ffc7f88a-85a7-48d5-ac03-09ef0a677280
     :param server_url: This corresponds to the contentUrl attribute in the Tableau REST API.
     :param sign_in_method: Whether to log in with username_password or access_token.
-    :return: connection object
+    :return: server object, connection object
     """
     if sign_in_method == 'username_password':
         tableau_auth = TSC.TableauAuth(username, password, site_id=site_id)
