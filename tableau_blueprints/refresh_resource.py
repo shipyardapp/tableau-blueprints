@@ -91,7 +91,7 @@ def refresh_workbook(server, workbook_id, workbook_name):
         print(e)
         sys.exit(errors.EXIT_CODE_REFRESH_ERROR)
 
-    return refreshed_datasource
+    return refreshed_workbook
 
 
 def main():
