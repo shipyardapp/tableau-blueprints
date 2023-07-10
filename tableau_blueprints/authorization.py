@@ -19,6 +19,10 @@ def connect_to_tableau(
     :param sign_in_method: Whether to log in with username_password or access_token.
     :return: server object, connection object
     """
+    # handle the cases where the tableau server does not have a specific site
+    if str(site_id).lower() == 'default': 
+        site_id = ''
+
     if sign_in_method == 'username_password':
         tableau_auth = TSC.TableauAuth(username, password, site_id=site_id)
 
