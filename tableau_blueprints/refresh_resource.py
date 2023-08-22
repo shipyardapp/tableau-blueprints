@@ -1,6 +1,7 @@
 import tableauserverclient as TSC
-import argparse
 import sys
+import time
+import argparse
 import shipyard_utils as shipyard
 
 # Handle import difference between local and github install
@@ -39,13 +40,12 @@ def get_args():
         dest='datasource_name',
         required=False)
     parser.add_argument('--project-name', dest='project_name', required=True)
-    parser.add_argument('--check-status', dest='check_status', default='TRUE',
+    parser.add_argument('--wait-for-completion', dest='wait_for_completion', default='FALSE',
                         choices={
                             'TRUE',
                             'FALSE'},
                         required=False)
-    args = parser.parse_args()
-    return args
+    return parser.parse_args()
 
 
 def refresh_datasource(server, datasource_id, datasource_name):
@@ -59,12 +59,11 @@ def refresh_datasource(server, datasource_id, datasource_name):
         print(f'Datasource {datasource_name} was successfully triggered.')
     except Exception as e:
         if 'Resource Conflict' in e.args[0]:
-            print(
-                f'A refresh or extract operation for the datasource is already underway.')
+            print('A refresh or extract operation for the datasource is already underway.')
         if 'is not allowed.' in e.args[0]:
-            print(f'Refresh or extract operation for the datasource is not allowed.')
+            print('Refresh or extract operation for the datasource is not allowed.')
         else:
-            print(f'An unknown refresh or extract error occurred.')
+            print('An unknown refresh or extract error occurred.')
         print(e)
         sys.exit(errors.EXIT_CODE_REFRESH_ERROR)
 
@@ -82,12 +81,11 @@ def refresh_workbook(server, workbook_id, workbook_name):
         print(f'Workbook {workbook_name} was successfully triggered.')
     except Exception as e:
         if 'Resource Conflict' in e.args[0]:
-            print(
-                f'A refresh or extract operation for the workbook is already underway.')
+            print('A refresh or extract operation for the workbook is already underway.')
         if 'is not allowed.' in e.args[0]:
-            print(f'Refresh or extract operation for the workbook is not allowed.')
+            print('Refresh or extract operation for the workbook is not allowed.')
         else:
-            print(f'An unknown refresh or extract error occurred.')
+            print('An unknown refresh or extract error occurred.')
         print(e)
         sys.exit(errors.EXIT_CODE_REFRESH_ERROR)
 
@@ -104,7 +102,7 @@ def main():
     datasource_name = args.datasource_name
     project_name = args.project_name
     sign_in_method = args.sign_in_method
-    should_check_status = shipyard.args.convert_to_boolean(args.check_status)
+    wait_for_completion = shipyard.args.convert_to_boolean(args.wait_for_completion)
 
     base_folder_name = shipyard.logs.determine_base_artifact_folder(
         'tableau')
@@ -133,16 +131,15 @@ def main():
                 server, workbook_id, workbook_name)
             job_id = refreshed_workbook.id
 
-        if should_check_status:
-            try:
-                # `wait_for_job` will automatically check every few seconds
-                # and throw if the job isn't executed successfully
-                print('Waiting for the job to complete...')
-                server.jobs.wait_for_job(job_id)
-                exit_code = job_status.determine_job_status(server, job_id)
-            except BaseException:
-                exit_code = job_status.determine_job_status(server, job_id)
-            sys.exit(exit_code)
+        if wait_for_completion:
+            exit_code_status = job_status.determine_job_status(server, job_id)
+            while exit_code_status == errors.EXIT_CODE_STATUS_INCOMPLETE:
+                print("Waiting for 60 seconds before checking again")
+                time.sleep(60)
+                exit_code_status = job_status.determine_job_status(server, job_id)
+
+            sys.exit(exit_code_status)
+
         else:
             shipyard.logs.create_pickle_file(
                 artifact_subfolder_paths, 'job_id', job_id)
