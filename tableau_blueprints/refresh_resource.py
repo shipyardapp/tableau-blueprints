@@ -40,9 +40,6 @@ def get_args():
         required=False)
     parser.add_argument('--project-name', dest='project_name', required=True)
     parser.add_argument('--check-status', dest='check_status', default='TRUE',
-                        choices={
-                            'TRUE',
-                            'FALSE'},
                         required=False)
     args = parser.parse_args()
     return args
